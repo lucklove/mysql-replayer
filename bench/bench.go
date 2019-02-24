@@ -46,16 +46,16 @@ type BenchCommand struct {
 func (*BenchCommand) Name() string     { return "bench" }
 func (*BenchCommand) Synopsis() string { return "Bench mysql server." }
 func (*BenchCommand) Usage() string {
-	return `bench -i input-dir -h host -P port -u user [-p passwd] [-s speed] [-c concurrent]:
+	return `bench -i input-dir [-h host] [-P port] [-u user] [-p passwd] [-s speed] [-c concurrent]:
 	Bench mysql server with data from input-dir.
-	`
+`
 }
   
 func (b *BenchCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&b.input, "i", "", "the directory contains bench data")
-	f.StringVar(&b.host, "h", "", "connect to host")
-	f.StringVar(&b.port, "P", "", "port number to use for connection")
-	f.StringVar(&b.user, "u", "", "user for login")
+	f.StringVar(&b.host, "h", "127.0.0.1", "connect to host")
+	f.StringVar(&b.port, "P", "4000", "port number to use for connection")
+	f.StringVar(&b.user, "u", "root", "user for login")
 	f.StringVar(&b.passwd, "p", "", "password to use when connecting to server")
 	f.IntVar(&b.speed, "s", 1, "the bench speed, default 1")
 	f.IntVar(&b.concurrent, "c", 1, "the bench concurrent, default 1")
@@ -67,32 +67,47 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 		return subcommands.ExitSuccess
 	}
 
-	ch := make(chan string, 10)
+	fch := make(chan string, 10)			// Pass file name
+	cch := make(chan int64, b.concurrent)	// Collect query count
 	wg := sync.WaitGroup{}
+	start := int64(time.Now().Unix())
 
+	fmt.Println("Processing...")
 	wg.Add(b.concurrent)
 	for i := 0; i < b.concurrent; i++ {
 		go func() {
 			defer wg.Done()
-			b.bench(ch)
+			cch <- b.bench(fch)
 		}()
 	}
 
 	if files, err := ioutil.ReadDir(b.input); err == nil {
+		fmt.Println(len(files))
 		sort.Sort(FileInfoSortByName(files))
 
 		for _, f := range files {
-			ch <- f.Name()
+			fch <- f.Name()
 		}
 
-		close(ch)
+		close(fch)
 	}
 
 	wg.Wait()
+	end := int64(time.Now().Unix())
+
+	var count int64 = 0
+	for i := 0; i < b.concurrent; i++ {
+		count += <- cch
+	}
+
+	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", count, end - start, count / (end - start))
+
 	return subcommands.ExitSuccess
 }
 
-func (b *BenchCommand) bench(ch chan string) {
+func (b *BenchCommand) bench(ch chan string) int64 {
+	var count int64 = 0
+
 	for name := range ch {
 		var synts int64 = 0
 		fmt.Sscanf(name, "%d", &synts)
@@ -119,10 +134,7 @@ func (b *BenchCommand) bench(ch chan string) {
 			
 			loop:
 			for {
-				task := &QueryTask {
-					ts: 0,
-					sql: "",
-				}
+				task := new(QueryTask)
 
 				line, err := reader.ReadString('\n')
 				if err != nil {
@@ -151,6 +163,7 @@ func (b *BenchCommand) bench(ch chan string) {
 				task.sql = task.sql[:len(task.sql)-1]	// Trim last '\n'
 
 				tch <- task
+				count++
 			}
 
 			close(tch)
@@ -158,12 +171,12 @@ func (b *BenchCommand) bench(ch chan string) {
 			wg.Wait()
 		}
 	}
+
+	return count
 }
 
 func (b *BenchCommand) benchWoker(dbname string, synts int64, ch chan *QueryTask) {
 	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s", b.user, b.passwd, b.host, b.port, dbname)
-	fmt.Println("open connection with ", dsn)
-
 	startts := int64(time.Now().Unix())
 
 	if db, err := sql.Open("mysql", dsn); err == nil {
@@ -171,15 +184,13 @@ func (b *BenchCommand) benchWoker(dbname string, synts int64, ch chan *QueryTask
 
 		for task := range ch {
 			curts := int64(time.Now().Unix())
-			diff_t := (task.ts - synts) / int64(b.speed) - (curts - startts)
+			delta := (task.ts - synts) / int64(b.speed) - (curts - startts)
 
-			if diff_t > 0 {
-				time.Sleep(time.Duration(diff_t) * time.Second)
+			if delta > 0 {
+				time.Sleep(time.Duration(delta) * time.Second)
 			}
 
 			db.Exec(task.sql)
 		}
 	}
-
-	fmt.Println("close connection with ", dsn)
 }

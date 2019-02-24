@@ -149,7 +149,7 @@ func (p *PrepareCommand) handleQuery(r *Record, tcp *layers.TCP, metadata *gopac
 func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 	metadata, ip, tcp := utils.ReadLayers(packet)
 	if metadata == nil || ip == nil || tcp == nil {
-		return;
+		return
 	}
 
 	if tcp.SYN {
@@ -166,7 +166,7 @@ func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 		}
 
 		// Tcp reorder
-		if(tcp.Seq < r.lastTcpSeq) {
+		if tcp.Seq < r.lastTcpSeq {
 			return
 		}
 
@@ -175,12 +175,12 @@ func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 		r.lastTcpLen = tcpLen
 		
 		if tcpLen == 0 {
-			return;
+			return
 		}
 
 		// Package lost
 		if tcp.Seq > r.lastTcpSeq + r.lastTcpLen {
-			if(r.fileEmpty) {
+			if r.fileEmpty {
 				// If the authentication request lost, the connection will be droped
 				p.deleteRecord(r, ip, tcp)
 			} else {
