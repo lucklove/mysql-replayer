@@ -63,7 +63,7 @@ func (b *BenchCommand) SetFlags(f *flag.FlagSet) {
 	f.IntVar(&b.concurrent, "c", 0, "the bench concurrent, 0 or negative number means dynamic concurrent")
 }
   
-func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
+func (b *BenchCommand) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
 	if len(b.input) == 0 || len(b.host) == 0 || len(b.port) == 0 || len(b.user) == 0 {
 		fmt.Println(b.Usage())
 		return subcommands.ExitSuccess
@@ -75,54 +75,14 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 
 	fmt.Println("Processing...")
 
-	go func() {
-		if files, err := ioutil.ReadDir(b.input); err == nil {
-			sort.Sort(FileInfoSortByName(files))
-
-			for _, f := range files {
-				fch <- f.Name()
-			}
-
-			close(fch)
-		}
-	}()
-
+	go b.benchDirReader(fch)
 	if b.concurrent > 0 {					// User set concurrent
-		wg.Add(b.concurrent)
-		for i := 0; i < b.concurrent; i++ {
-			go func() {
-				defer wg.Done()
-				for name := range fch {
-					b.bench(name)
-				}
-			}()
-		}
+		b.staticWorker(&wg, fch)
 	} else {								// Dynamic concurrent
-		var basets int64 = 0
-		startts := int64(time.Now().Unix())
-		for name := range fch {
-			var synts int64 = 0
-			fmt.Sscanf(name, "%d", &synts)
-			if basets == 0 {
-				basets = synts				// Use the first synts as basets
-			}
-
-			curts := int64(time.Now().Unix())
-			delta := (synts - basets) / int64(b.speed) - (curts - startts)
-
-			if delta > 0 {
-				time.Sleep(time.Duration(delta) * time.Second)
-			}
-
-			wg.Add(1)
-			go func(name string) {
-				defer wg.Done()
-				b.bench(name)
-			}(name)
-		}
+		b.dynamicWorker(&wg, fch)
 	}
 
-	wg.Wait()
+	b.sync(ctx, &wg)
 	end := int64(time.Now().Unix())
 	delta := end - start
 
@@ -134,6 +94,71 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end - start, b.qcount / delta)
 
 	return subcommands.ExitSuccess
+}
+
+func (b *BenchCommand) sync(ctx context.Context, wg *sync.WaitGroup) {
+	wch := make(chan struct{})
+	go func() {
+		defer close(wch)
+		wg.Wait()
+	}()
+
+	select {
+	case <- wch:
+	case <- ctx.Done():
+	}
+}
+
+func (b *BenchCommand) benchDirReader(fch chan string) {
+	if files, err := ioutil.ReadDir(b.input); err == nil {
+		sort.Sort(FileInfoSortByName(files))
+
+		for _, f := range files {
+			fch <- f.Name()
+		}
+
+		close(fch)
+	} else {
+		fmt.Println(err)
+		close(fch)
+	}
+}
+
+func (b *BenchCommand) staticWorker(wg *sync.WaitGroup, fch chan string) {
+	wg.Add(b.concurrent)
+	for i := 0; i < b.concurrent; i++ {
+		go func() {
+			defer wg.Done()
+			for name := range fch {
+				b.bench(name)
+			}
+		}()
+	}
+}
+
+func (b * BenchCommand) dynamicWorker(wg *sync.WaitGroup, fch chan string) {
+	var basets int64 = 0
+	startts := int64(time.Now().Unix())
+	for name := range fch {
+		var synts int64 = 0
+		fmt.Sscanf(name, "%d", &synts)
+		if basets == 0 {
+			basets = synts				// Use the first synts as basets
+		}
+
+		curts := int64(time.Now().Unix())
+		delta := (synts - basets) / int64(b.speed) - (curts - startts)
+
+		if delta > 0 {
+			time.Sleep(time.Duration(delta) * time.Second)
+		}
+
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			b.bench(name)
+		}(name)
+	}
 }
 
 func (b *BenchCommand) bench(name string) {
@@ -193,7 +218,6 @@ func (b *BenchCommand) bench(name string) {
 			task.sql = task.sql[:len(task.sql)-1]	// Trim last '\n'
 
 			tch <- task
-			atomic.AddInt64(&b.qcount, 1)
 		}
 
 		close(tch)
@@ -217,6 +241,7 @@ func (b *BenchCommand) benchWoker(dbname string, synts int64, ch chan *QueryTask
 			}
 
 			db.Exec(task.sql)
+			atomic.AddInt64(&b.qcount, 1)
 		}
 	}
 }
