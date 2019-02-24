@@ -59,8 +59,8 @@ func (b *BenchCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&b.port, "P", "4000", "port number to use for connection")
 	f.StringVar(&b.user, "u", "root", "user for login")
 	f.StringVar(&b.passwd, "p", "", "password to use when connecting to server")
-	f.IntVar(&b.speed, "s", 1, "the bench speed, default 1")
-	f.IntVar(&b.concurrent, "c", 1, "the bench concurrent, default 1")
+	f.IntVar(&b.speed, "s", 1, "the bench speed")
+	f.IntVar(&b.concurrent, "c", 0, "the bench concurrent, 0 or negative number means dynamic concurrent")
 }
   
 func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
@@ -74,30 +74,64 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 	start := int64(time.Now().Unix())
 
 	fmt.Println("Processing...")
-	wg.Add(b.concurrent)
-	for i := 0; i < b.concurrent; i++ {
-		go func() {
-			defer wg.Done()
-			for name := range fch {
-				b.bench(name)
+
+	go func() {
+		if files, err := ioutil.ReadDir(b.input); err == nil {
+			sort.Sort(FileInfoSortByName(files))
+
+			for _, f := range files {
+				fch <- f.Name()
 			}
-		}()
-	}
 
-	if files, err := ioutil.ReadDir(b.input); err == nil {
-		sort.Sort(FileInfoSortByName(files))
-
-		for _, f := range files {
-			fch <- f.Name()
+			close(fch)
 		}
+	}()
 
-		close(fch)
+	if b.concurrent > 0 {					// User set concurrent
+		wg.Add(b.concurrent)
+		for i := 0; i < b.concurrent; i++ {
+			go func() {
+				defer wg.Done()
+				for name := range fch {
+					b.bench(name)
+				}
+			}()
+		}
+	} else {								// Dynamic concurrent
+		var basets int64 = 0
+		startts := int64(time.Now().Unix())
+		for name := range fch {
+			var synts int64 = 0
+			fmt.Sscanf(name, "%d", &synts)
+			if basets == 0 {
+				basets = synts				// Use the first synts as basets
+			}
+
+			curts := int64(time.Now().Unix())
+			delta := (synts - basets) / int64(b.speed) - (curts - startts)
+
+			if delta > 0 {
+				time.Sleep(time.Duration(delta) * time.Second)
+			}
+
+			wg.Add(1)
+			go func(name string) {
+				defer wg.Done()
+				b.bench(name)
+			}(name)
+		}
 	}
 
 	wg.Wait()
 	end := int64(time.Now().Unix())
+	delta := end - start
 
-	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end - start, b.qcount / (end - start))
+	// Avoid integer divide by zero
+	if delta == 0 {
+		delta = 1
+	}
+
+	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end - start, b.qcount / delta)
 
 	return subcommands.ExitSuccess
 }

@@ -53,7 +53,7 @@ mysql-replayer bench -i input-dir [-h host] [-P port] [-u user] [-p passwd] [-s 
   -P string
         port number to use for connection (default "4000")
   -c int
-        the bench concurrent, default 1 (default 1)
+        the bench concurrent, 0 or negative number means dynamic concurrent
   -h string
         connect to host (default "127.0.0.1")
   -i string
@@ -61,7 +61,7 @@ mysql-replayer bench -i input-dir [-h host] [-P port] [-u user] [-p passwd] [-s 
   -p string
         password to use when connecting to server
   -s int
-        the bench speed, default 1 (default 1)
+        the bench speed (default 1)
   -u string
         user for login (default "root")
 ```
@@ -69,6 +69,7 @@ mysql-replayer bench -i input-dir [-h host] [-P port] [-u user] [-p passwd] [-s 
 ```sh
 mysql-replayer bench -i /tmp/test  -c 200 -s 2 # 用户和端口由于是默认值不用填
 ```
+如果不使用参数`-c`，它将使用默认值`0`，这表示根据录制流量时的实际情况动态调整并发（比如录制的时候为`200`过了一会儿增至`1000`，那么这里也会自动从`200`增至`1000`）
 
 ### 结果
 录制20s sysbench压测流量（768并发），sysbench实际输出为:
