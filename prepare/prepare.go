@@ -78,6 +78,11 @@ func (p *PrepareCommand) createRecord(metadata *gopacket.PacketMetadata, ip *lay
 	if f, err := os.Create(fpath); err == nil {
 		identity := fmt.Sprintf("%s-%d", ip.SrcIP, tcp.SrcPort)
 
+		// TCP SYN resend or FIN lost
+		if r, ok := p.records[identity]; ok {
+			p.deleteRecord(r, ip, tcp)
+		}
+
 		p.records[identity] = &Record {
 			file: f,
 			fileEmpty: true,

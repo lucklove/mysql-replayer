@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"context"
 	"io/ioutil"
+	"sync/atomic"
 	"database/sql"
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/subcommands"
@@ -41,6 +42,7 @@ type BenchCommand struct {
 	passwd string
 	speed int
 	concurrent int
+	qcount int64		// Query count, calculate by worker
 }
 
 func (*BenchCommand) Name() string     { return "bench" }
@@ -68,7 +70,6 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 	}
 
 	fch := make(chan string, 10)			// Pass file name
-	cch := make(chan int64, b.concurrent)	// Collect query count
 	wg := sync.WaitGroup{}
 	start := int64(time.Now().Unix())
 
@@ -77,12 +78,13 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 	for i := 0; i < b.concurrent; i++ {
 		go func() {
 			defer wg.Done()
-			cch <- b.bench(fch)
+			for name := range fch {
+				b.bench(name)
+			}
 		}()
 	}
 
 	if files, err := ioutil.ReadDir(b.input); err == nil {
-		fmt.Println(len(files))
 		sort.Sort(FileInfoSortByName(files))
 
 		for _, f := range files {
@@ -95,84 +97,74 @@ func (b *BenchCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interfac
 	wg.Wait()
 	end := int64(time.Now().Unix())
 
-	var count int64 = 0
-	for i := 0; i < b.concurrent; i++ {
-		count += <- cch
-	}
-
-	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", count, end - start, count / (end - start))
+	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end - start, b.qcount / (end - start))
 
 	return subcommands.ExitSuccess
 }
 
-func (b *BenchCommand) bench(ch chan string) int64 {
-	var count int64 = 0
+func (b *BenchCommand) bench(name string) {
+	var synts int64 = 0
+	fmt.Sscanf(name, "%d", &synts)
 
-	for name := range ch {
-		var synts int64 = 0
-		fmt.Sscanf(name, "%d", &synts)
+	path := fmt.Sprintf("%s/%s", b.input, name)
+	if file, err := os.Open(path); err == nil {
+		defer file.Close()
 
-		path := fmt.Sprintf("%s/%s", b.input, name)
-		if file, err := os.Open(path); err == nil {
-			reader := bufio.NewReader(file)
+		reader := bufio.NewReader(file)
 
-			dbname, err := reader.ReadString('\n')
+		dbname, err := reader.ReadString('\n')
+		if err != nil {
+			utils.LogIOError(err)
+			return
+		}
+		fmt.Sscanf(dbname, "%s\n", &dbname)
+
+		tch := make(chan *QueryTask, 100)
+
+		wg := sync.WaitGroup{}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			b.benchWoker(dbname, synts, tch)
+		}()
+		
+		loop:
+		for {
+			task := new(QueryTask)
+
+			line, err := reader.ReadString('\n')
 			if err != nil {
 				utils.LogIOError(err)
-				file.Close()
-				continue
+				break loop
 			}
-			fmt.Sscanf(dbname, "%s\n", &dbname)
+			fmt.Sscanf(line, "%d", &task.ts)
 
-			tch := make(chan *QueryTask, 100)
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				b.benchWoker(dbname, synts, tch)
-			}()
-			
-			loop:
-			for {
-				task := new(QueryTask)
+			sqllen := 0
+			line, err = reader.ReadString('\n')
+			if err != nil {
+				utils.LogIOError(err)
+				break loop
+			}
+			fmt.Sscanf(line, "%d\n", &sqllen)
 
-				line, err := reader.ReadString('\n')
-				if err != nil {
-					utils.LogIOError(err)
-					break loop
-				}
-				fmt.Sscanf(line, "%d", &task.ts)
-
-				sqllen := 0
+			for len(task.sql) < sqllen {
 				line, err = reader.ReadString('\n')
 				if err != nil {
 					utils.LogIOError(err)
 					break loop
 				}
-				fmt.Sscanf(line, "%d\n", &sqllen)
 
-				for len(task.sql) < sqllen {
-					line, err = reader.ReadString('\n')
-					if err != nil {
-						utils.LogIOError(err)
-						break loop
-					}
-
-					task.sql += line
-				}
-				task.sql = task.sql[:len(task.sql)-1]	// Trim last '\n'
-
-				tch <- task
-				count++
+				task.sql += line
 			}
+			task.sql = task.sql[:len(task.sql)-1]	// Trim last '\n'
 
-			close(tch)
-			file.Close()
-			wg.Wait()
+			tch <- task
+			atomic.AddInt64(&b.qcount, 1)
 		}
-	}
 
-	return count
+		close(tch)
+		wg.Wait()
+	}
 }
 
 func (b *BenchCommand) benchWoker(dbname string, synts int64, ch chan *QueryTask) {
