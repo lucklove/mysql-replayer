@@ -1,48 +1,49 @@
 package bench
 
 import (
-	"os"
-	"fmt"
-	"flag"
-	"sort"
-	"sync"
-	"time"
 	"bufio"
 	"context"
-	"io/ioutil"
-	"sync/atomic"
 	"database/sql"
+	"flag"
+	"fmt"
+	"io/ioutil"
+	"os"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/google/subcommands"
 	"github.com/lucklove/mysql-replayer/utils"
 )
 
 type QueryTask struct {
-	ts int64
+	ts  int64
 	sql string
 }
 
 type FileInfoSortByName []os.FileInfo
 
 func (s FileInfoSortByName) Len() int {
-    return len(s)
+	return len(s)
 }
 func (s FileInfoSortByName) Swap(i, j int) {
-    s[i], s[j] = s[j], s[i]
+	s[i], s[j] = s[j], s[i]
 }
 func (s FileInfoSortByName) Less(i, j int) bool {
-    return s[i].Name() < s[j].Name()
+	return s[i].Name() < s[j].Name()
 }
 
 type BenchCommand struct {
-	input string
-	host string
-	port string
-	user string
-	passwd string
-	speed int
+	input      string
+	host       string
+	port       string
+	user       string
+	passwd     string
+	speed      int
 	concurrent int
-	qcount int64		// Query count, calculate by worker
+	qcount     int64 // Query count, calculate by worker
 }
 
 func (*BenchCommand) Name() string     { return "bench" }
@@ -52,7 +53,7 @@ func (*BenchCommand) Usage() string {
 	Bench mysql server with data from input-dir.
 `
 }
-  
+
 func (b *BenchCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&b.input, "i", "", "the directory contains bench data")
 	f.StringVar(&b.host, "h", "127.0.0.1", "connect to host")
@@ -62,23 +63,23 @@ func (b *BenchCommand) SetFlags(f *flag.FlagSet) {
 	f.IntVar(&b.speed, "s", 1, "the bench speed")
 	f.IntVar(&b.concurrent, "c", 0, "the bench concurrent, 0 or negative number means dynamic concurrent")
 }
-  
+
 func (b *BenchCommand) Execute(ctx context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
 	if len(b.input) == 0 || len(b.host) == 0 || len(b.port) == 0 || len(b.user) == 0 {
 		fmt.Println(b.Usage())
 		return subcommands.ExitSuccess
 	}
 
-	fch := make(chan string, 10)			// Pass file name
+	fch := make(chan string, 10) // Pass file name
 	wg := sync.WaitGroup{}
 	start := int64(time.Now().Unix())
 
 	fmt.Println("Processing...")
 
 	go b.benchDirReader(fch)
-	if b.concurrent > 0 {					// User set concurrent
+	if b.concurrent > 0 { // User set concurrent
 		b.staticWorker(&wg, fch)
-	} else {								// Dynamic concurrent
+	} else { // Dynamic concurrent
 		b.dynamicWorker(&wg, fch)
 	}
 
@@ -91,7 +92,7 @@ func (b *BenchCommand) Execute(ctx context.Context, f *flag.FlagSet, _ ...interf
 		delta = 1
 	}
 
-	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end - start, b.qcount / delta)
+	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end-start, b.qcount/delta)
 
 	return subcommands.ExitSuccess
 }
@@ -104,8 +105,8 @@ func (b *BenchCommand) sync(ctx context.Context, wg *sync.WaitGroup) {
 	}()
 
 	select {
-	case <- wch:
-	case <- ctx.Done():
+	case <-wch:
+	case <-ctx.Done():
 	}
 }
 
@@ -136,18 +137,18 @@ func (b *BenchCommand) staticWorker(wg *sync.WaitGroup, fch chan string) {
 	}
 }
 
-func (b * BenchCommand) dynamicWorker(wg *sync.WaitGroup, fch chan string) {
+func (b *BenchCommand) dynamicWorker(wg *sync.WaitGroup, fch chan string) {
 	var basets int64 = 0
 	startts := int64(time.Now().Unix())
 	for name := range fch {
 		var synts int64 = 0
 		fmt.Sscanf(name, "%d", &synts)
 		if basets == 0 {
-			basets = synts				// Use the first synts as basets
+			basets = synts // Use the first synts as basets
 		}
 
 		curts := int64(time.Now().Unix())
-		delta := (synts - basets) / int64(b.speed) - (curts - startts)
+		delta := (synts-basets)/int64(b.speed) - (curts - startts)
 
 		if delta > 0 {
 			time.Sleep(time.Duration(delta) * time.Second)
@@ -186,8 +187,8 @@ func (b *BenchCommand) bench(name string) {
 			defer wg.Done()
 			b.benchWoker(dbname, synts, tch)
 		}()
-		
-		loop:
+
+	loop:
 		for {
 			task := new(QueryTask)
 
@@ -215,7 +216,7 @@ func (b *BenchCommand) bench(name string) {
 
 				task.sql += line
 			}
-			task.sql = task.sql[:len(task.sql)-1]	// Trim last '\n'
+			task.sql = task.sql[:len(task.sql)-1] // Trim last '\n'
 
 			tch <- task
 		}
@@ -234,7 +235,7 @@ func (b *BenchCommand) benchWoker(dbname string, synts int64, ch chan *QueryTask
 
 		for task := range ch {
 			curts := int64(time.Now().Unix())
-			delta := (task.ts - synts) / int64(b.speed) - (curts - startts)
+			delta := (task.ts-synts)/int64(b.speed) - (curts - startts)
 
 			if delta > 0 {
 				time.Sleep(time.Duration(delta) * time.Second)

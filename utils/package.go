@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
@@ -33,16 +34,16 @@ func ReadConnectDBName(data []byte) (dbname string) {
 		return ""
 	}
 
-	pos := 32;
+	pos := 32
 	pos += bytes.IndexByte(data[pos:], 0x00) + 1
 
-	if (capabilities & CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) == 0 && 
-	   (capabilities & CLIENT_SECURE_CONNECTION) == 0 {
+	if (capabilities&CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) == 0 &&
+		(capabilities&CLIENT_SECURE_CONNECTION) == 0 {
 		pos += bytes.IndexByte(data[pos:], 0x00) + 1
 	} else {
 		pos += int(data[pos]) + 1
 	}
 
-	l := bytes.IndexByte(data[pos:], 0x00);
-	return string(data[pos:pos+l])
+	l := bytes.IndexByte(data[pos:], 0x00)
+	return string(data[pos : pos+l])
 }

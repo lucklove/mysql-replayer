@@ -1,10 +1,10 @@
 package utils
 
 import (
+	"errors"
+	"fmt"
 	"io"
 	"os"
-	"fmt"
-	"errors"
 )
 
 func InsertSQLToFile(file *os.File, sql string, timestamp int64) {

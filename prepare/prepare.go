@@ -1,34 +1,35 @@
 package prepare
 
 import (
-	"os"
-	"fmt"
-	"flag"
 	"context"
+	"flag"
+	"fmt"
 	"math/rand"
-	"github.com/google/subcommands"
-	"github.com/google/gopacket/pcap"
+	"os"
+
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
+	"github.com/google/subcommands"
 	"github.com/lucklove/mysql-replayer/utils"
 )
 
 type Record struct {
-	file *os.File
-	fileEmpty bool
-	lastTcpSeq uint32
-	lastTcpLen uint32
+	file           *os.File
+	fileEmpty      bool
+	lastTcpSeq     uint32
+	lastTcpLen     uint32
 	unresolvedData []byte
-	expectLen int
-	dropping bool
+	expectLen      int
+	dropping       bool
 }
 
 type PrepareCommand struct {
-	input string
-	output string
+	input   string
+	output  string
 	records map[string]*Record
 }
-  
+
 func (*PrepareCommand) Name() string     { return "prepare" }
 func (*PrepareCommand) Synopsis() string { return "Translate .pcap file to input file of next stage." }
 func (*PrepareCommand) Usage() string {
@@ -36,12 +37,12 @@ func (*PrepareCommand) Usage() string {
 	Analyze pcap file to connection streams.
 	`
 }
-  
+
 func (p *PrepareCommand) SetFlags(f *flag.FlagSet) {
 	f.StringVar(&p.input, "i", "", "input pcap file")
 	f.StringVar(&p.output, "o", "", "output directory")
 }
-  
+
 func (p *PrepareCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interface{}) subcommands.ExitStatus {
 	if len(p.output) == 0 || len(p.input) == 0 {
 		fmt.Println(p.Usage())
@@ -68,11 +69,11 @@ func (p *PrepareCommand) Execute(_ context.Context, f *flag.FlagSet, _ ...interf
 }
 
 func (p *PrepareCommand) createRecord(metadata *gopacket.PacketMetadata, ip *layers.IPv4, tcp *layers.TCP) {
-	fname := fmt.Sprintf("%d-%s-%s-%d.rec", 
-						metadata.Timestamp.Unix(), 
-						ip.SrcIP, 
-						tcp.SrcPort,
-						rand.Intn(1000000))
+	fname := fmt.Sprintf("%d-%s-%s-%d.rec",
+		metadata.Timestamp.Unix(),
+		ip.SrcIP,
+		tcp.SrcPort,
+		rand.Intn(1000000))
 	fpath := fmt.Sprintf("%s/%s", p.output, fname)
 
 	if f, err := os.Create(fpath); err == nil {
@@ -83,14 +84,14 @@ func (p *PrepareCommand) createRecord(metadata *gopacket.PacketMetadata, ip *lay
 			p.deleteRecord(r, ip, tcp)
 		}
 
-		p.records[identity] = &Record {
-			file: f,
-			fileEmpty: true,
-			lastTcpSeq: tcp.Seq,
-			lastTcpLen: uint32(len(tcp.Payload)),
+		p.records[identity] = &Record{
+			file:           f,
+			fileEmpty:      true,
+			lastTcpSeq:     tcp.Seq,
+			lastTcpLen:     uint32(len(tcp.Payload)),
 			unresolvedData: []byte{},
-			expectLen: 0,
-			dropping: false,
+			expectLen:      0,
+			dropping:       false,
 		}
 	}
 }
@@ -101,7 +102,6 @@ func (p *PrepareCommand) deleteRecord(r *Record, ip *layers.IPv4, tcp *layers.TC
 	r.file.Close()
 	delete(p.records, identity)
 }
-
 
 func (p *PrepareCommand) handlePackageLost(r *Record, tcp *layers.TCP, metadata *gopacket.PacketMetadata) {
 	if r.expectLen != 0 {
@@ -165,7 +165,7 @@ func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 	identity := fmt.Sprintf("%s-%d", ip.SrcIP, tcp.SrcPort)
 	if r, ok := p.records[identity]; ok {
 		// Connection closed
-		if tcp.FIN  {
+		if tcp.FIN {
 			p.deleteRecord(r, ip, tcp)
 			return
 		}
@@ -178,13 +178,13 @@ func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 		tcpLen := uint32(len(tcp.Payload))
 		r.lastTcpSeq = tcp.Seq
 		r.lastTcpLen = tcpLen
-		
+
 		if tcpLen == 0 {
 			return
 		}
 
 		// Package lost
-		if tcp.Seq > r.lastTcpSeq + r.lastTcpLen {
+		if tcp.Seq > r.lastTcpSeq+r.lastTcpLen {
 			if r.fileEmpty {
 				// If the authentication request lost, the connection will be droped
 				p.deleteRecord(r, ip, tcp)
@@ -193,13 +193,13 @@ func (p *PrepareCommand) handlePacket(packet gopacket.Packet) {
 				p.handlePackageLost(r, tcp, metadata)
 			}
 			return
-		} 
+		}
 
 		if r.fileEmpty {
 			p.handleAuthentication(r, tcp)
-		} else if r.expectLen != 0 {		// There is data unresolved
+		} else if r.expectLen != 0 { // There is data unresolved
 			p.appendUnresolvedData(r, tcp, metadata)
-		} else if tcp.Payload[4] == 3 { 	// Only handle query
+		} else if tcp.Payload[4] == 3 { // Only handle query
 			p.handleQuery(r, tcp, metadata)
 		}
 	}

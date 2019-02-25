@@ -1,10 +1,11 @@
 package main
 
 import (
-	"os"
-	"flag"
 	"context"
+	"flag"
+	"os"
 	"os/signal"
+
 	"github.com/google/subcommands"
 	"github.com/lucklove/mysql-replayer/bench"
 	"github.com/lucklove/mysql-replayer/prepare"
@@ -25,7 +26,7 @@ func main() {
 	signal.Notify(ch, os.Interrupt)
 
 	go func() {
-		<- ch
+		<-ch
 		cancel()
 	}()
 
