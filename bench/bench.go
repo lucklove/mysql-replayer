@@ -92,7 +92,8 @@ func (b *BenchCommand) Execute(ctx context.Context, f *flag.FlagSet, _ ...interf
 		delta = 1
 	}
 
-	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", b.qcount, end-start, b.qcount/delta)
+	count := atomic.LoadInt64(&b.qcount)
+	fmt.Printf("Process %d querys in %d seconds, QPS: %d\n", count, end-start, count/delta)
 
 	return subcommands.ExitSuccess
 }
